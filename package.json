@@ -1,0 +1,17 @@
+{
+  "name": "impiricus-smoke-tests",
+  "version": "1.0.0",
+  "description": "Playwright smoke test suite for impiricus.com — enterprise POM architecture with CI/CD pipeline",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report"
+  },
+  "keywords": ["playwright", "smoke-tests", "test-automation", "page-object-model"],
+  "license": "ISC",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@types/node": "^25.5.0"
+  }
+}
