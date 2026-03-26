@@ -12,7 +12,7 @@ This project provides enterprise-grade automated testing using **Playwright** wi
 - **Language:** JavaScript (CommonJS, Node.js)
 - **Module Format:** CommonJS (`require`/`module.exports`)
 - **Browser:** Chromium
-- **Architecture:** Page Object Model (POM)
+- **Architecture:** Page Object Model (POM) + API client layer
 
 ## Setup
 
@@ -58,39 +58,50 @@ npx playwright show-report
 ```
 impiricus-smoke-tests/
 ├── .github/
-│   ├── agents/                           # AI agent configuration
+│   ├── agents/                                    # AI agent configuration
+│   │   ├── playwright-test-generator.agent.md    # Agent: generates new Playwright tests
+│   │   ├── playwright-test-healer.agent.md       # Agent: repairs failing tests
+│   │   └── playwright-test-planner.agent.md      # Agent: plans test scenarios
 │   └── workflows/
-│       ├── copilot-setup-steps.yml      # GitHub Copilot setup
-│       └── playwright.yml                # CI/CD pipeline for automated tests
+│       ├── copilot-setup-steps.yml               # GitHub Copilot setup
+│       └── playwright.yml                         # CI/CD pipeline for automated tests
 ├── .vscode/
-│   └── mcp.json                          # VS Code settings & extensions
-├── pages/                                # Page Object Model (POM) classes
-│   ├── HomePage.js                      # Homepage interactions & navigation
-│   ├── ContactPage.js                   # Contact form page object
-│   ├── ProductsPage.js                  # Products page object
-│   └── SolutionsPage.js                 # Solutions page object
-├── tests/                                # Test specifications
-│   ├── seed.spec.js                     # Seed test (homepage load verification)
+│   └── mcp.json                                   # VS Code MCP settings
+├── api/                                           # API clients and REST wrappers
+│   ├── ContentApiClient.js                       # WP REST API client (pages endpoint)
+│   └── apiHelper.js                              # Validation helpers: field checks, exposure checks
+├── data/                                          # Test data: endpoints, field definitions, payloads
+│   └── api.js                                    # API endpoint paths, required fields, sensitive fields
+├── fixtures/                                      # Playwright test fixtures
+│   └── index.js                                  # POM and API client fixture extensions
+├── pages/                                         # Page Object Model (POM) classes
+│   ├── ContactPage.js                            # Contact form page object
+│   ├── HomePage.js                               # Homepage interactions & navigation
+│   ├── ProductsPage.js                           # Products page object
+│   └── SolutionsPage.js                          # Solutions page object
+├── specs/                                         # Test plans & documentation
+│   ├── impiricus-api.plan.md                     # API test plan: content validation
+│   └── impiricus-navigation.plan.md              # UI test plan: navigation flows
+├── tests/                                         # Test specifications
+│   ├── api/
+│   │   └── content-api.spec.js                   # Tests: WP REST API /pages endpoint
 │   ├── homepage/
-│   │   └── get-started-button.spec.js   # Test: Get Started button navigation
+│   │   └── get-started-button.spec.js            # Test: Get Started button navigation
 │   ├── products/
-│   │   └── ascend-product.spec.js       # Test: Products page & Ascend product
-│   └── solutions/
-│       └── solutions-render.spec.js     # Test: Solutions page rendering
-├── fixtures/                            # Playwright test fixtures
-│   └── index.js                         # POM fixture extensions
-├── specs/                               # Test plans & documentation
-│   └── impiricus-navigation.plan.md    # Test plan for navigation flows
-├── .gitignore                           # Git ignore patterns
-├── CLAUDE.md                            # Development guidelines & conventions
-├── README.md                            # This file
-├── playwright.config.js                 # Playwright configuration
-├── package.json                         # npm dependencies & scripts
-└── package-lock.json                    # Locked dependency versions
+│   │   └── ascend-product.spec.js                # Test: Products page & Ascend product
+│   ├── solutions/
+│   │   └── solutions-render.spec.js              # Test: Solutions page rendering
+│   └── seed.spec.js                              # Seed test: homepage load verification
+├── .gitignore                                     # Git ignore patterns
+├── CLAUDE.md                                      # Development guidelines & conventions
+├── README.md                                      # This file
+├── package-lock.json                              # Locked dependency versions
+├── package.json                                   # npm dependencies & scripts
+└── playwright.config.js                           # Playwright configuration
 
 Artifacts (generated, not committed):
-├── test-results/                        # Test execution results
-└── playwright-report/                   # HTML test report
+├── test-results/                                  # Test execution results
+└── playwright-report/                             # HTML test report
 ```
 
 ## Test Scenarios
@@ -118,6 +129,22 @@ Artifacts (generated, not committed):
 - **Test Name:** `Solutions Page Rendering`
 - **Description:** Verifies Solutions page loads and displays all solution categories.
 - **Coverage:** Solutions page navigation, category rendering, all 6 solution types visible
+
+### 4. WordPress REST API — Pages Content
+- **File:** `tests/api/content-api.spec.js`
+- **Plan:** `specs/impiricus-api.plan.md`
+
+#### 4.1 Endpoint returns 200 and valid JSON array
+- **Description:** Confirms the `/wp-json/wp/v2/pages` endpoint is reachable, returns HTTP 200, and responds with a non-empty JSON array.
+- **Coverage:** Status code, response shape, array length
+
+#### 4.2 Each page object contains required fields with correct types
+- **Description:** Iterates every page object in the response and validates required field presence, correct types, expected values (`status: publish`, `type: page`), and that `link` contains the expected domain.
+- **Coverage:** Field presence, type assertions, value constraints, `title.rendered` non-empty
+
+#### 4.3 Negative test — no sensitive fields exposed
+- **Description:** Confirms that no page object in the public API response exposes sensitive fields (`password`, `email`, `phone`, `private`). Demonstrates PHI-exposure prevention validation applicable to healthcare data environments.
+- **Coverage:** Sensitive field scan across all response objects
 
 ## Architecture & Best Practices
 
@@ -159,6 +186,25 @@ const test = base.extend({
   homePage: async ({ page }, use) => {
     await use(new HomePage(page));
   },
+});
+```
+
+### API Client Layer
+
+API tests use Playwright's `APIRequestContext` (`request` fixture) — server-side HTTP that respects `baseURL` without launching a browser. Each endpoint is wrapped in a client class in `api/`, validation logic lives in `api/apiHelper.js`, and all test data (endpoint paths, field lists) is centralized in `data/api.js`:
+
+```javascript
+// api/ContentApiClient.js — wraps the endpoint call
+async getPages() {
+  const response = await this.request.get(endpoints.pages);
+  return { status: response.status(), body: await response.json() };
+}
+
+// tests/api/content-api.spec.js — clean, declarative test body
+test('Each page object contains required fields', async ({ contentApi }) => {
+  const { status, body } = await contentApi.getPages();
+  const errors = body.flatMap((obj, i) => validatePageObject(obj, i));
+  expect(errors, errors.join('\n')).toHaveLength(0);
 });
 ```
 
@@ -223,35 +269,13 @@ See [CLAUDE.md](CLAUDE.md) for complete development guidelines and conventions.
 - Failures automatically capture screenshots and videos
 - View in HTML report: `npx playwright show-report`
 
-## Contributing
-
-### Adding a New Feature Test
-
-1. **Plan the test** — Document scenarios in a new markdown file under `specs/`
-2. **Create page objects** — Define new POM classes in `pages/` for any new pages
-3. **Create test files** — Add test specs in `tests/{feature-name}/`
-4. **Add fixtures** — Register new POMs in `fixtures/index.js`
-5. **Test locally** — Run tests with `npx playwright test --headed`
-6. **Follow conventions** — Adhere to CLAUDE.md POM and CommonJS standards
-
-### Code Review Checklist
-
-- [ ] All locators defined in POM classes (not inline in tests)
-- [ ] Tests use fixtures to receive POMs (not `page` directly)
-- [ ] CommonJS format used (`require`/`module.exports`)
-- [ ] Reliable semantic locators (`getByRole()`, etc.)
-- [ ] No `test.only()` left in code
-- [ ] All tests pass locally before pushing
-- [ ] README updated if adding new pages/features
-
 ## Resources
 
 - [Playwright Documentation](https://playwright.dev) — Official framework docs
 - [Playwright Best Practices](https://playwright.dev/docs/best-practices) — Testing patterns
 - [Impiricus Homepage](https://www.impiricus.com) — Application under test
 - [CLAUDE.md](CLAUDE.md) — Project-specific guidelines & conventions
-- [Test Plan](specs/impiricus-navigation.plan.md) — Navigation test scenarios
+- [Navigation Test Plan](specs/impiricus-navigation.plan.md) — Navigation test scenarios
+- [API Test Plan](specs/impiricus-api.plan.md) — API content validation scenarios
 
-## License
 
-© 2026 Impiricus. Internal testing suite.

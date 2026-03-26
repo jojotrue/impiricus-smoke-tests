@@ -106,3 +106,64 @@ Enterprise Playwright smoke test suite targeting `https://www.impiricus.com/`.
 - `forbidOnly: true` — build fails if `test.only` is left in code
 - `retries: 2` on CI, `0` locally
 - `workers: 1` on CI (sequential), unlimited locally (parallel)
+
+## API Test Rules
+
+These rules apply to every file in `api/`, `tests/api/`, and any fixture or data file that supports API testing.
+
+### Request Context
+
+- Always use Playwright's `APIRequestContext` (`request` fixture) for HTTP calls — never `page.evaluate()` with `fetch()`.
+- `request` is server-side, respects `baseURL`, and returns native JS objects without browser serialization overhead.
+
+```js
+// Correct
+const response = await request.get('/api/resource');
+const body = await response.json();
+
+// Never do this
+const result = await page.evaluate(async () => {
+  const res = await fetch('https://example.com/api/resource'); // ✗
+});
+
+API Client Layer
+All endpoint calls are wrapped in a client class in api/ — never call request.get() directly inside a test.
+Each client method returns a plain object with status and body so tests stay declarative.
+API clients are instantiated through fixtures in fixtures/index.js, never directly in test files.
+
+// Correct — client wraps the call
+async getResource() {
+  const response = await this.request.get(endpoints.resource);
+  return { status: response.status(), body: await response.json() };
+}
+Validation Helpers
+Field validation and sensitive-data checks live in api/apiHelper.js, not inline in tests.
+Helper functions accept (obj, index) and return an array of error strings — empty array means pass.
+Tests call helpers via flatMap and assert on the resulting array length, with the joined errors as the failure message.
+
+// Correct
+const errors = body.flatMap((obj, i) => validateObject(obj, i));
+expect(errors, errors.join('\n')).toHaveLength(0);
+
+API Test Data
+All endpoint paths, required field definitions, expected values, and sensitive field lists live in data/api.js.
+No hard-coded URLs, domain strings, field names, or magic values at the test or helper level.
+Endpoint paths are relative strings so baseURL from playwright.config.js is always honored.
+
+// Correct — data/api.js
+const endpoints = {
+  resource: '/api/resource',
+};
+const sensitiveFields = ['password', 'token', 'ssn'];
+
+API Fixtures
+Every API client has a corresponding fixture in fixtures/index.js using the request context.
+API test files destructure the client fixture — never { page } — unless the test genuinely requires browser interaction alongside the API call.
+
+// Correct fixture definition
+myApiClient: async ({ request }, use) => {
+  await use(new MyApiClient(request));
+},
+
+// Correct test signature
+test('...', async ({ myApiClient }) => { ... });
